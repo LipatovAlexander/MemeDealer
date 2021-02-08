@@ -2,58 +2,98 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net.Mime;
 
 namespace Core
 {
     public class MemeRepository
     {
-        readonly ApplicationContext db;
+        private List<Meme> Memes { get; set; }
+        private Dictionary<string, List<Meme>> MemesWithTags { get; set; }
 
+        private const string ImagesDirectoryName = "Images";
+        private string ImagesDirectoryPath { get; }
         public MemeRepository()
         {
-            db = new ApplicationContext();
+            using var db = new ApplicationContext();
+            // Download memes from database
+            Memes = db.Memes.ToList();
+
+            // Get images folder full path
+            ImagesDirectoryPath = Path.Combine(Directory.GetCurrentDirectory(), ImagesDirectoryName);
+
+            // Update tags dictionary
+            MemesWithTags = new Dictionary<string, List<Meme>>();
+            foreach (Meme meme in Memes)
+                UpdateDictionary(meme);
+        }
+
+        public void UpdateDictionary(Meme meme)
+        {
+            string[] tags = meme.Tags.Split();
+            foreach (string tag in tags)
+            {
+                if (!(MemesWithTags.ContainsKey(tag)))
+                    MemesWithTags.Add(tag, new List<Meme>());
+                MemesWithTags[tag].Add(meme);
+            }
         }
 
         public void SaveChanges()
         {
+            using var db = new ApplicationContext();
+            db.Memes.UpdateRange(Memes);
             db.SaveChanges();
         }
 
+        // Why?
         public void Clear()
         {
-            db.Memes.RemoveRange(db.Memes);
+            throw new NotImplementedException();
         }
 
         public void Remove(Meme meme)
         {
-            db.Memes.Remove(meme);
+            Memes.Remove(meme);
         }
 
-        public List<Meme> GetAll()
+        public List<Meme> GetAllMemes()
         {
-            return db.Memes.ToList();
+            return Memes;
+        }
+
+        public List<string> GetAllTags()
+        {
+            return MemesWithTags.Keys.ToList();
         }
 
         /// <summary>
         /// Adds a new meme to the database
         /// </summary>
-        /// <param name="newMeme">new meme</param>
-        public void Add(Meme newMeme)
+        /// <param name="meme">New meme</param>
+        public void Add(Meme meme)
         {
-            FileInfo oldFile = new FileInfo(newMeme.PathToFile);
-            string destDir = "Images";
+            CheckImagesDirectoryExists();
+            MakeMemeBackup(meme);
+            Memes.Add(meme);
+            using var db = new ApplicationContext();
+            db.Memes.Add(meme);
+            UpdateDictionary(meme);
+        }
 
-            if (!Directory.Exists(destDir))
-                Directory.CreateDirectory(destDir);
+        private void CheckImagesDirectoryExists()
+        {
+            if (!Directory.Exists(ImagesDirectoryName))
+                Directory.CreateDirectory(ImagesDirectoryName);
+        }
 
-            string newFileName = newMeme.Name + oldFile.Extension;
-            string newPathToFile = Path.Combine(destDir, newFileName);
-
-            oldFile.CopyTo(newPathToFile, true);
-
-            newMeme.PathToFile = newPathToFile;
-
-            db.Memes.Add(newMeme);
+        private void MakeMemeBackup(Meme meme)
+        {
+            var originalFile = new FileInfo(meme.PathToFile);
+            var newFilename = string.Concat(meme.Name, originalFile.Extension);
+            var newFilepath = Path.Combine(ImagesDirectoryPath, newFilename);
+            originalFile.CopyTo(newFilepath, true);
+            meme.PathToFile = newFilepath;
         }
 
         /// <summary>
@@ -65,37 +105,21 @@ namespace Core
         public List<Meme> FindByTags(string tagsString)
         {
             string[] requiredTags = tagsString.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-
+            var result = new List<Meme>();
             if (requiredTags.Length == 0)
             {
-                return db.Memes.ToList();
+                return Memes;
             }
 
-            List<Meme> result = new List<Meme>();
-
-            foreach (Meme meme in db.Memes.ToList())
+            foreach (string tag in requiredTags)
             {
-                string[] tags = meme.Tags.Split();
-
-                foreach (string tag in tags)
+                if (MemesWithTags.ContainsKey(tag))
                 {
-                    bool found = false;
-                    foreach (string requiredTag in requiredTags)
-                    {
-                        if (tag == requiredTag)
-                        {
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (found)
-                    {
-                        result.Add(meme);
-                        break;
-                    }
+                    foreach (Meme meme in MemesWithTags[tag])
+                        if (!(result.Contains(meme)))
+                            result.Add(meme);
                 }
             }
-
             return result;
         }
     }
